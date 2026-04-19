@@ -1,13 +1,17 @@
+from builtins import str
+
 import discord
 from discord import client, message
 from discord.ext import commands
 import logging
+import json
 
 from discord.ext.commands import Context
 from dotenv import load_dotenv
 import os
 
 from data.foods import *
+from data.foods import Food
 from data.pets import *
 
 load_dotenv()
@@ -24,6 +28,8 @@ class Game:
     host: discord.User | discord.Member
     players: list[discord.User | discord.Member] = []
     banned: list[Pet | Food] = []
+    banned_pet_ids: set[int] = set()
+    banned_food_ids: set[int] = set()
     thread: discord.TextChannel
 
     def __init__(self, host: discord.Member, channel: discord.TextChannel):
@@ -31,6 +37,46 @@ class Game:
         self.players = [host]
         self.banned = []
         self.thread = channel
+
+
+    def ban(self, target: Pet | Food):
+        if type(target) is Pet:
+            print("Banning pet!")
+            self.banned_pet_ids.add(target.id)
+        elif type(target) is Food:
+            self.banned_food_ids.add(target.id)
+            print("Banning food!")
+        else:
+            print("Ban failed")
+
+        self.banned.append(target)
+
+    def is_pack_valid(self, pack: dict) -> str:
+        if not "Minions" in pack:
+            return "Invalid pack: No Minions"
+
+        if not "Spells" in pack:
+            return "Invalid pack: No Spells"
+
+        pack_pets: list[int] = pack["Minions"]
+        pack_foods: list[int] = pack["Spells"]
+
+        banned_pet_ids_in_pack = list(filter(lambda pet: pet in self.banned_pet_ids, pack_pets))
+        banned_foods_ids_in_pack = list(filter(lambda food: food in self.banned_food_ids, pack_foods))
+
+        if len(banned_pet_ids_in_pack + banned_foods_ids_in_pack) == 0:
+            return "Valid pack!"
+
+        print(banned_pet_ids_in_pack) # list[petId] -> list[petName]
+
+        print(list(filter(lambda pet: pet in self.banned_pet_ids, pack_pets)))
+        print(list(map(lambda pet: pet.name, filter(lambda pet: pet in self.banned_pet_ids, pets))))
+
+        banned_pets_in_pack: list[Pet] = list(map(lambda pet: pet.name, filter(lambda pet: pet in self.banned_pet_ids, pets)))
+        banned_foods_in_pack: list[Food] = list(map(lambda food: food.name, filter(lambda food: food in self.banned_food_ids, foods)))
+
+        return 'Banned pets detected: ' + ', '.join(banned_pets_in_pack + banned_foods_in_pack)
+
 
 
 active_games: list[Game] = []
@@ -73,11 +119,6 @@ async def close_lobby(ctx: Context):
 
 
 @bot.command()
-async def hello_world(ctx: Context):
-    await ctx.send(f"Hello {ctx.author.mention}")
-
-
-@bot.command()
 async def ban(ctx: Context, arg):
     # TODO: Determine game from active channel instead
     participating_games: list[Game] = list(filter(lambda g: ctx.author in g.players, active_games))
@@ -86,6 +127,7 @@ async def ban(ctx: Context, arg):
         await ctx.send("You're currently not participating in a game")
         return
 
+    # TODO: Move to game
     ban_item: Pet | Food | None = next((item for item in (pets + foods) if item.name == arg.lower()), None)
     valid_request = ban_item is not None
 
@@ -101,8 +143,19 @@ async def ban(ctx: Context, arg):
         await ctx.send(f"{arg.title()} has already been banned!")
         return
 
-    current_game.banned.append(ban_item)
-    await ctx.send(f"Banning {arg.title()}")
+    current_game.ban(target=ban_item)
+    await ctx.send(f"{arg.title()} has been banned")
+
+
+@bot.command()
+async def check_pack(ctx: Context, *, message: str):
+    pack = json.loads(message)
+
+    participating_games: list[Game] = list(filter(lambda g: ctx.author in g.players, active_games))
+    current_game = participating_games[0]
+
+    response = current_game.is_pack_valid(pack)
+    await ctx.send(response)
 
 
 def get_lobby_for_channel(channel: discord.TextChannel | discord.VoiceChannel | discord.StageChannel | discord.Thread | discord.DMChannel | discord.PartialMessageable | discord.GroupChannel):
